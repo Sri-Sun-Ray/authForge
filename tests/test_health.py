@@ -10,6 +10,12 @@ async def test_liveness(client: AsyncClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
+async def test_jwks_endpoint(client: AsyncClient) -> None:
+    response = await client.get("/.well-known/jwks.json")
+    assert response.status_code == 200
+    assert response.json()["keys"][0]["kty"] == "RSA"
+
+
 @pytest.mark.skipif(
     not os.getenv("INTEGRATION"), reason="needs Postgres and Redis (set INTEGRATION=1)"
 )

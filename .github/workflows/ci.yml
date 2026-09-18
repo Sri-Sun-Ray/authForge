@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: authforge
+          POSTGRES_PASSWORD: authforge
+          POSTGRES_DB: authforge
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U authforge"
+          --health-interval 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://authforge:authforge@localhost:5432/authforge
+      REDIS_URL: redis://localhost:6379/0
+      INTEGRATION: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: python scripts/generate_keys.py
+      - run: alembic upgrade head
+      - run: pytest --cov=app --cov-report=term-missing

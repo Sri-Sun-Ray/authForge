@@ -1,0 +1,66 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://authforge:authforge@db:5432/authforge
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./keys:/app/keys:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Runs lint + the full test suite against real Postgres/Redis:
+  #   docker compose run --rm --build test
+  test:
+    profiles: ["test"]
+    build:
+      context: .
+      args:
+        INSTALL_DEV: "true"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://authforge:authforge@db:5432/authforge
+      REDIS_URL: redis://redis:6379/0
+      INTEGRATION: "1"
+    volumes:
+      - .:/app
+    command: >-
+      sh -c "ruff check . && alembic upgrade head
+      && python -m pytest -p no:cacheprovider --cov=app --cov-report=term-missing"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: authforge
+      POSTGRES_PASSWORD: authforge
+      POSTGRES_DB: authforge
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authforge"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"  # host 6380 avoids clashing with other local Redis instances
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  pgdata:

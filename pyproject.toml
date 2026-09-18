@@ -22,7 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3",
-    "pytest-asyncio>=0.24",
+    "pytest-asyncio>=1.1",
     "pytest-cov>=5.0",
     "ruff>=0.6",
 ]
@@ -37,6 +37,8 @@ include = ["app*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
+# One event loop for the whole run: the shared DB engine pools connections bound to a loop
+asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 
 [tool.ruff]
@@ -48,4 +50,4 @@ select = ["E", "F", "I", "B", "UP", "S"]
 ignore = ["B008"]  # FastAPI's Depends() in default args is idiomatic
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]  # assert is fine in tests
+"tests/**" = ["S101", "S105", "S106"]  # asserts and dummy credentials are fine in tests

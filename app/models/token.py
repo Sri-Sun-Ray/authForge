@@ -24,6 +24,11 @@ class RefreshToken(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     # All tokens descended from a single login share a family_id
     family_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    # Which tenant this session is working in; null until the user picks one.
+    # Stored so that refreshing keeps the tenant instead of silently dropping it.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE")
+    )
 
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

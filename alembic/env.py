@@ -13,7 +13,9 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
-database_url = get_settings().database_url
+settings = get_settings()
+# Migrations run as the owner; the API itself uses the restricted role
+database_url = settings.database_admin_url or settings.database_url
 
 
 def run_migrations_offline() -> None:

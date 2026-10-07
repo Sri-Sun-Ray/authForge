@@ -24,6 +24,30 @@ API docs: http://localhost:8000/docs · Health: http://localhost:8000/health/rea
 
 Run everything in Docker instead: `docker compose up --build`
 
+### Two database roles
+
+Postgres lets superusers — and, unless a table is set to `FORCE ROW LEVEL SECURITY`, its
+owner — bypass row-level security, so one connection string is not enough:
+
+| Role | Used by | Rights |
+| --- | --- | --- |
+| `authforge` (`DATABASE_ADMIN_URL`) | Alembic migrations | owns the schema |
+| `authforge_app` (`DATABASE_URL`) | the API | read/write rows the policies allow, no DDL |
+
+Migrations create `authforge_app` with the password from `APP_DB_PASSWORD`; set that
+outside local development.
+
+## API
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /auth/register` · `/login` · `/refresh` · `/logout` · `GET /auth/me` | accounts and sessions |
+| `GET /.well-known/jwks.json` | public keys for verifying access tokens |
+| `POST /tenants` · `GET /tenants` | create an organization, list your own |
+| `POST /tenants/{id}/switch` | move the session into a tenant (rotates its tokens) |
+| `GET /tenants/current` · `/current/members` | the tenant the token is scoped to |
+| `POST /tenants/current/invites` · `POST /invites/accept` | invite by email, redeem once |
+
 ## Tests and linting
 
 ```bash
@@ -53,9 +77,9 @@ tests/
 
 ## Roadmap
 
-- [ ] **1. Core auth:** register, login, logout, Argon2 hashing, RS256 access tokens,
+- [x] **1. Core auth:** register, login, logout, Argon2 hashing, RS256 access tokens,
       refresh-token rotation with reuse detection, JWKS endpoint
-- [ ] **2. Multi-tenancy:** tenants, memberships, invites, tenant switching, Postgres RLS
+- [x] **2. Multi-tenancy:** tenants, memberships, invites, tenant switching, Postgres RLS
 - [ ] **3. RBAC:** roles, permissions, `require_permission()` dependency, Redis permission cache
 - [ ] **4. Hardening:** sliding-window rate limiting, account lockout, email verification,
       password reset, Google OAuth2 login

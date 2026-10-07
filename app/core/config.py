@@ -11,7 +11,10 @@ class Settings(BaseSettings):
     environment: str = "local"  # local | test | production
     debug: bool = False
 
-    database_url: str = "postgresql+asyncpg://authforge:authforge@localhost:5432/authforge"
+    # The API connects as a restricted role that cannot bypass row-level security
+    database_url: str = "postgresql+asyncpg://authforge_app:authforge_app@localhost:5432/authforge"
+    # Migrations need table ownership, so they use this one (defaults to database_url)
+    database_admin_url: str | None = None
     redis_url: str = "redis://localhost:6380/0"
 
     # JWT (RS256): generate keys with `python scripts/generate_keys.py`
@@ -21,6 +24,7 @@ class Settings(BaseSettings):
     jwt_audience: str = "authforge-clients"
     access_token_ttl_minutes: int = 15
     refresh_token_ttl_days: int = 7
+    invite_ttl_days: int = 7
 
     # Security
     login_max_failed_attempts: int = 5

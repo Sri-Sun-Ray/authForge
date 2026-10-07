@@ -29,7 +29,8 @@ Milestone 5 (models/audit.py)
 """
 
 from app.db.base import Base
+from app.models.tenant import Invite, Membership, Tenant
 from app.models.token import RefreshToken
 from app.models.user import User
 
-__all__ = ["Base", "RefreshToken", "User"]
+__all__ = ["Base", "Invite", "Membership", "RefreshToken", "Tenant", "User"]

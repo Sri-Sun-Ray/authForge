@@ -42,6 +42,10 @@ class RefreshTokenReused(InvalidRefreshToken):
     """A revoked token was presented again: it was probably stolen."""
 
 
+# Sentinel: "keep whatever tenant this session is already in"
+KEEP_TENANT = object()
+
+
 @dataclass(frozen=True)
 class ClientInfo:
     ip: str | None = None
@@ -88,7 +92,8 @@ async def authenticate(db: AsyncSession, email: str, password: str) -> User:
 
 async def login(db: AsyncSession, email: str, password: str, client: ClientInfo) -> TokenPair:
     user = await authenticate(db, email, password)
-    pair, _ = await _issue_tokens(db, user, family_id=uuid.uuid4(), client=client)
+    # A fresh login has no tenant yet; the client picks one with /tenants/{id}/switch
+    pair, _ = await _issue_tokens(db, user, family_id=uuid.uuid4(), client=client, tenant_id=None)
     await db.commit()
     return pair
 
@@ -96,7 +101,14 @@ async def login(db: AsyncSession, email: str, password: str, client: ClientInfo)
 # --- Refresh / logout -------------------------------------------------------
 
 
-async def rotate_refresh_token(db: AsyncSession, raw_token: str, client: ClientInfo) -> TokenPair:
+async def rotate_refresh_token(
+    db: AsyncSession,
+    raw_token: str,
+    client: ClientInfo,
+    tenant_id: uuid.UUID | None | object = KEEP_TENANT,
+) -> TokenPair:
+    """Rotate a refresh token. By default the session stays in its current tenant;
+    pass tenant_id to move it (see tenant_service.switch_tenant)."""
     now = datetime.now(UTC)
     # Lock the row so two concurrent refreshes with the same token can't both succeed
     token = await db.scalar(
@@ -123,7 +135,10 @@ async def rotate_refresh_token(db: AsyncSession, raw_token: str, client: ClientI
         await db.commit()
         raise InvalidRefreshToken
 
-    pair, new_token = await _issue_tokens(db, user, family_id=token.family_id, client=client)
+    new_tenant_id = token.tenant_id if tenant_id is KEEP_TENANT else tenant_id
+    pair, new_token = await _issue_tokens(
+        db, user, family_id=token.family_id, client=client, tenant_id=new_tenant_id
+    )
     token.revoked_at = now
     token.replaced_by_id = new_token.id
     await db.commit()
@@ -147,7 +162,11 @@ async def logout(db: AsyncSession, raw_token: str) -> None:
 
 
 async def _issue_tokens(
-    db: AsyncSession, user: User, family_id: uuid.UUID, client: ClientInfo
+    db: AsyncSession,
+    user: User,
+    family_id: uuid.UUID,
+    client: ClientInfo,
+    tenant_id: uuid.UUID | None,
 ) -> tuple[TokenPair, RefreshToken]:
     settings = get_settings()
     raw_refresh, refresh_hash = generate_refresh_token()
@@ -155,6 +174,7 @@ async def _issue_tokens(
         user_id=user.id,
         token_hash=refresh_hash,
         family_id=family_id,
+        tenant_id=tenant_id,
         expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_ttl_days),
         created_ip=client.ip,
         user_agent=client.user_agent[:512] if client.user_agent else None,
@@ -163,7 +183,9 @@ async def _issue_tokens(
     await db.flush()  # assigns refresh_row.id
 
     pair = TokenPair(
-        access_token=create_access_token(str(user.id)),
+        access_token=create_access_token(
+            str(user.id), tenant_id=str(tenant_id) if tenant_id else None
+        ),
         refresh_token=raw_refresh,
         expires_in=settings.access_token_ttl_minutes * 60,
     )

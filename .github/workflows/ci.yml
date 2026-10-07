@@ -28,7 +28,8 @@ jobs:
           --health-interval 5s --health-retries 10
 
     env:
-      DATABASE_URL: postgresql+asyncpg://authforge:authforge@localhost:5432/authforge
+      DATABASE_URL: postgresql+asyncpg://authforge_app:authforge_app@localhost:5432/authforge
+      DATABASE_ADMIN_URL: postgresql+asyncpg://authforge:authforge@localhost:5432/authforge
       REDIS_URL: redis://localhost:6379/0
       INTEGRATION: "1"
 

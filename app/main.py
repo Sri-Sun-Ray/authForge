@@ -31,6 +31,7 @@ def create_app() -> FastAPI:
 
     for module in (health, wellknown, auth, tenants, roles, audit):
         app.include_router(module.router)
+    app.include_router(tenants.invites_router)
 
     return app
 

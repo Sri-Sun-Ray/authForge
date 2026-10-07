@@ -18,8 +18,12 @@ from app.core.security import (
     password_needs_rehash,
     verify_password,
 )
-from app.models import RefreshToken, User
+from app.models import OneTimeToken, RefreshToken, User
 from app.schemas.auth import TokenPair
+from app.services import mailer
+
+PURPOSE_VERIFY_EMAIL = "verify_email"
+PURPOSE_RESET_PASSWORD = "reset_password"  # noqa: S105 (a label, not a secret)
 
 
 class AuthError(Exception):
@@ -34,7 +38,19 @@ class InvalidCredentials(AuthError):
     pass
 
 
+class AccountLocked(AuthError):
+    """Too many failed logins. Carries the seconds left on the lock."""
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__("Account temporarily locked")
+        self.retry_after_seconds = retry_after_seconds
+
+
 class InvalidRefreshToken(AuthError):
+    pass
+
+
+class InvalidOneTimeToken(AuthError):
     pass
 
 
@@ -73,6 +89,8 @@ async def register_user(db: AsyncSession, email: str, password: str) -> User:
 
 
 async def authenticate(db: AsyncSession, email: str, password: str) -> User:
+    settings = get_settings()
+    now = datetime.now(UTC)
     user = await db.scalar(select(User).where(User.email == normalize_email(email)))
 
     if user is None or user.password_hash is None:
@@ -80,11 +98,25 @@ async def authenticate(db: AsyncSession, email: str, password: str) -> User:
         # reveal whether the email is registered
         verify_password(password, dummy_password_hash())
         raise InvalidCredentials
+
+    if user.locked_until is not None and user.locked_until > now:
+        raise AccountLocked(int((user.locked_until - now).total_seconds()))
+
     if not verify_password(password, user.password_hash):
+        # Lock the account after repeated failures, so an attacker cannot work
+        # through a password list even from many different IP addresses
+        user.failed_login_count += 1
+        if user.failed_login_count >= settings.login_max_failed_attempts:
+            user.locked_until = now + timedelta(minutes=settings.login_lockout_minutes)
+            user.failed_login_count = 0
+        await db.commit()
         raise InvalidCredentials
     if not user.is_active:
         raise InvalidCredentials
 
+    if user.failed_login_count or user.locked_until:
+        user.failed_login_count = 0
+        user.locked_until = None
     if password_needs_rehash(user.password_hash):
         user.password_hash = hash_password(password)
     return user
@@ -156,6 +188,112 @@ async def logout(db: AsyncSession, raw_token: str) -> None:
     if family_id is not None:
         await _revoke_family(db, family_id, datetime.now(UTC))
         await db.commit()
+
+
+# --- Email verification and password reset ----------------------------------
+
+
+async def _issue_one_time_token(
+    db: AsyncSession, user: User, purpose: str, lifetime: timedelta
+) -> str:
+    # Any earlier token for the same purpose stops working, so a forwarded or
+    # intercepted older email is useless
+    await db.execute(
+        update(OneTimeToken)
+        .where(
+            OneTimeToken.user_id == user.id,
+            OneTimeToken.purpose == purpose,
+            OneTimeToken.used_at.is_(None),
+        )
+        .values(used_at=datetime.now(UTC))
+    )
+    raw_token, token_hash = generate_refresh_token()
+    db.add(
+        OneTimeToken(
+            user_id=user.id,
+            purpose=purpose,
+            token_hash=token_hash,
+            expires_at=datetime.now(UTC) + lifetime,
+        )
+    )
+    return raw_token
+
+
+async def _consume_one_time_token(db: AsyncSession, raw_token: str, purpose: str) -> User:
+    token = await db.scalar(
+        select(OneTimeToken)
+        .where(
+            OneTimeToken.token_hash == hash_refresh_token(raw_token),
+            OneTimeToken.purpose == purpose,
+        )
+        .with_for_update()
+    )
+    if token is None or not token.is_usable():
+        raise InvalidOneTimeToken
+    user = await db.get(User, token.user_id)
+    if user is None or not user.is_active:  # pragma: no cover - deleted mid-flow
+        raise InvalidOneTimeToken
+    token.used_at = datetime.now(UTC)
+    return user
+
+
+async def request_email_verification(db: AsyncSession, user: User) -> None:
+    if user.is_email_verified:
+        return
+    settings = get_settings()
+    raw_token = await _issue_one_time_token(
+        db, user, PURPOSE_VERIFY_EMAIL, timedelta(hours=settings.verification_token_ttl_hours)
+    )
+    await db.commit()
+    await mailer.send_email(
+        to=user.email,
+        subject="Confirm your email address",
+        body=f"Confirm your address: {mailer.link('/auth/verify-email/confirm', raw_token)}",
+    )
+
+
+async def confirm_email_verification(db: AsyncSession, raw_token: str) -> User:
+    user = await _consume_one_time_token(db, raw_token, PURPOSE_VERIFY_EMAIL)
+    user.is_email_verified = True
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def request_password_reset(db: AsyncSession, email: str) -> None:
+    """Always succeeds from the caller's point of view: an unknown address must look
+    exactly like a known one, or this endpoint becomes an account-existence oracle."""
+    settings = get_settings()
+    user = await db.scalar(select(User).where(User.email == normalize_email(email)))
+    if user is None or not user.is_active:
+        return
+
+    raw_token = await _issue_one_time_token(
+        db,
+        user,
+        PURPOSE_RESET_PASSWORD,
+        timedelta(minutes=settings.password_reset_token_ttl_minutes),
+    )
+    await db.commit()
+    await mailer.send_email(
+        to=user.email,
+        subject="Reset your password",
+        body=f"Reset your password: {mailer.link('/auth/password-reset/confirm', raw_token)}",
+    )
+
+
+async def confirm_password_reset(db: AsyncSession, raw_token: str, new_password: str) -> None:
+    user = await _consume_one_time_token(db, raw_token, PURPOSE_RESET_PASSWORD)
+    user.password_hash = hash_password(new_password)
+    # A reset is also the remedy for a compromised account, so end every session
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    )
+    user.failed_login_count = 0
+    user.locked_until = None
+    await db.commit()
 
 
 # --- Helpers ----------------------------------------------------------------

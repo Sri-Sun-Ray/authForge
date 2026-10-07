@@ -4,12 +4,14 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
+from app.core.rate_limit import check_rate_limit
 from app.core.redis import get_redis
 from app.core.security import TokenError, decode_access_token
 from app.db.session import get_db
@@ -85,6 +87,29 @@ async def get_current_tenant(
     if tenant is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not a member of this tenant")
     return tenant
+
+
+def client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def rate_limit(bucket: str, limit_name: str, window_seconds: int) -> Callable:
+    """Per-IP rate limit. `limit_name` is read from settings on each request so the
+    limit can be tuned (and tests can lower it) without rebuilding the dependency."""
+
+    async def limiter(request: Request, redis: Redis = Depends(get_redis)) -> None:
+        limit = getattr(get_settings(), limit_name)
+        result = await check_rate_limit(
+            redis, f"rl:{bucket}:ip:{client_ip(request)}", limit, window_seconds
+        )
+        if not result.allowed:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "Too many requests. Try again shortly.",
+                headers={"Retry-After": str(result.retry_after_seconds)},
+            )
+
+    return limiter
 
 
 def require_permission(permission: str) -> Callable:

@@ -50,6 +50,26 @@ outside local development.
 | `GET /permissions` · `GET /tenants/current/permissions` | the catalogue, and what you may do here |
 | `GET/POST /tenants/current/roles` · `PUT/DELETE .../{role_id}` | built-in and custom roles |
 | `GET/PUT /tenants/current/users/{user_id}/roles` | read or replace a member's roles |
+| `POST /auth/verify-email/request` · `/confirm` | confirm an address with a one-time link |
+| `POST /auth/password-reset` · `/password-reset/confirm` | reset a forgotten password |
+
+### Abuse protection
+
+- **Rate limits** use a Redis sorted set per bucket — a true sliding window, where a fixed
+  window would let twice the limit through at the boundary. Login is limited per IP *and*
+  per account, so a botnet spread across many addresses still cannot grind one victim's
+  password. Limits come from settings, and a Redis outage fails open rather than locking
+  everybody out.
+- **Account lockout** after `LOGIN_MAX_FAILED_ATTEMPTS` failures, cleared by a successful
+  login or a password reset.
+- **One-time links** for verification and reset are stored as hashes, expire, work once,
+  and are bound to a purpose, so a verification link cannot reset a password. Requesting a
+  new link invalidates the previous one, and a reset revokes every existing session.
+- **No account-existence oracle:** password reset answers identically for addresses that
+  exist and ones that don't.
+
+Email is not wired to a provider: messages are logged and kept in an in-memory outbox
+(`app/services/mailer.py`). Swapping in SES or SendGrid means replacing one function.
 
 ### Roles and permissions
 
@@ -95,8 +115,8 @@ tests/
       refresh-token rotation with reuse detection, JWKS endpoint
 - [x] **2. Multi-tenancy:** tenants, memberships, invites, tenant switching, Postgres RLS
 - [x] **3. RBAC:** roles, permissions, `require_permission()` dependency, Redis permission cache
-- [ ] **4. Hardening:** sliding-window rate limiting, account lockout, email verification,
-      password reset, Google OAuth2 login
+- [x] **4. Hardening:** sliding-window rate limiting, account lockout, email verification,
+      password reset _(Google OAuth2 login still open — needs client credentials)_
 - [ ] **5. Audit logs:** append-only, hash-chained, searchable per tenant
 - [ ] **6. Production:** 80%+ coverage, load test (k6/Locust), deploy to GCP Cloud Run,
       architecture diagrams

@@ -46,3 +46,27 @@ class RefreshToken(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     def __repr__(self) -> str:
         return f"<RefreshToken {self.id} user={self.user_id} family={self.family_id}>"
+
+
+class OneTimeToken(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """A single-use token emailed to a user: verify this address, or reset this password.
+
+    Stored as a hash like every other token, so a database leak reveals nothing usable.
+    """
+
+    __tablename__ = "one_time_tokens"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    purpose: Mapped[str] = mapped_column(String(32), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    def is_usable(self, now: datetime | None = None) -> bool:
+        now = now or datetime.now(UTC)
+        return self.used_at is None and self.expires_at > now
+
+    def __repr__(self) -> str:
+        return f"<OneTimeToken {self.purpose} user={self.user_id}>"

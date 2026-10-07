@@ -29,7 +29,17 @@ class Settings(BaseSettings):
     # Security
     login_max_failed_attempts: int = 5
     login_lockout_minutes: int = 15
+    verification_token_ttl_hours: int = 24
+    password_reset_token_ttl_minutes: int = 30
+
+    # Rate limits (per client IP unless stated otherwise)
     rate_limit_login_per_minute: int = 10
+    rate_limit_login_per_account_per_minute: int = 5
+    rate_limit_register_per_hour: int = 20
+    rate_limit_password_reset_per_hour: int = 5
+
+    # Used to build the links sent by email
+    app_base_url: str = "http://localhost:8000"
 
     # OAuth2 (Google)
     google_client_id: str = ""

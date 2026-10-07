@@ -6,7 +6,7 @@ from httpx import AsyncClient
 from sqlalchemy import select, text, update
 
 from app.db.session import SessionLocal
-from app.models import Invite, Membership, Tenant, User
+from app.models import Invite, Membership, User
 from tests.test_auth import bearer, login, new_email, register, registered_tokens
 
 pytestmark = pytest.mark.skipif(
@@ -235,14 +235,13 @@ async def test_members_list_shows_only_this_tenant(client: AsyncClient) -> None:
 
 async def test_rls_hides_other_tenants_rows(client: AsyncClient) -> None:
     """Even a query with no tenant filter sees only the tenant set on the connection."""
-    await tenant_session(client)
-    await tenant_session(client)
+    # Both tenants are created here, so the assertions never depend on rows other
+    # tests happened to leave behind
+    _, tenant_a = await tenant_session(client)
+    _, tenant_b = await tenant_session(client)
+    target, other = uuid.UUID(tenant_a["id"]), uuid.UUID(tenant_b["id"])
 
     async with SessionLocal() as session:
-        all_tenant_ids = set(await session.scalars(select(Tenant.id)))
-        assert len(all_tenant_ids) >= 2
-        target = next(iter(all_tenant_ids))
-
         await session.execute(
             text("SELECT set_config('app.tenant_id', :tid, true)"), {"tid": str(target)}
         )
@@ -251,7 +250,8 @@ async def test_rls_hides_other_tenants_rows(client: AsyncClient) -> None:
 
         # Clearing the setting restores the system-wide view
         await session.execute(text("SELECT set_config('app.tenant_id', '', true)"))
-        assert len(set(await session.scalars(select(Membership.tenant_id)))) >= 2
+        system_view = set(await session.scalars(select(Membership.tenant_id)))
+        assert {target, other} <= system_view
         await session.rollback()
 
 
@@ -260,11 +260,16 @@ async def test_rls_blocks_cross_tenant_writes(client: AsyncClient) -> None:
     _, tenant_b = await tenant_session(client)
 
     async with SessionLocal() as session:
-        user_id = await session.scalar(select(User.id).limit(1))
+        # A brand-new user, so the insert can only fail because of the policy and
+        # never because the membership already exists
+        user = User(email=new_email(), password_hash="x")
+        session.add(user)
+        await session.flush()
+
         await session.execute(
             text("SELECT set_config('app.tenant_id', :tid, true)"), {"tid": tenant_a["id"]}
         )
-        session.add(Membership(tenant_id=uuid.UUID(tenant_b["id"]), user_id=user_id))
+        session.add(Membership(tenant_id=uuid.UUID(tenant_b["id"]), user_id=user.id))
         with pytest.raises(Exception, match="row-level security"):
             await session.flush()
         await session.rollback()

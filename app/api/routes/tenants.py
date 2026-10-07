@@ -5,8 +5,9 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_tenant, get_current_user
+from app.api.deps import get_current_tenant, get_current_user, require_permission
 from app.api.routes.auth import client_info
+from app.core import permissions as perms
 from app.db.session import get_db
 from app.models import Tenant, User
 from app.schemas.auth import TokenPair
@@ -73,7 +74,9 @@ async def current_tenant(tenant: Tenant = Depends(get_current_tenant)) -> Tenant
 
 @router.get("/current/members", response_model=list[MemberOut])
 async def list_members(
-    tenant: Tenant = Depends(get_current_tenant), db: AsyncSession = Depends(get_db)
+    tenant: Tenant = Depends(get_current_tenant),
+    _: User = Depends(require_permission(perms.USERS_READ)),
+    db: AsyncSession = Depends(get_db),
 ) -> list[MemberOut]:
     members = await tenant_service.list_members(db, tenant.id)
     return [
@@ -86,10 +89,9 @@ async def list_members(
 async def invite_member(
     body: InviteCreate,
     tenant: Tenant = Depends(get_current_tenant),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission(perms.USERS_INVITE)),
     db: AsyncSession = Depends(get_db),
 ) -> InviteOut:
-    # Milestone 3 will restrict this to Depends(require_permission("users:invite"))
     invite, raw_token = await tenant_service.create_invite(db, tenant.id, body.email, user)
     return InviteOut(
         id=invite.id, email=invite.email, expires_at=invite.expires_at, token=raw_token

@@ -1,9 +1,4 @@
-"""Shared FastAPI dependencies.
-
-Still to implement:
-- require_permission("users:invite") (Milestone 3): check the user's permissions
-  for the current tenant, cached in Redis
-"""
+"""Shared FastAPI dependencies."""
 
 import uuid
 from collections.abc import Callable
@@ -11,13 +6,15 @@ from typing import Any
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.redis import get_redis
 from app.core.security import TokenError, decode_access_token
 from app.db.session import get_db
 from app.models import Tenant, User
-from app.services import tenant_service
+from app.services import rbac_service, tenant_service
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
@@ -91,7 +88,23 @@ async def get_current_tenant(
 
 
 def require_permission(permission: str) -> Callable:
-    async def checker():
-        raise NotImplementedError
+    """Dependency factory: `Depends(require_permission("users:invite"))`.
+
+    Permissions come from the user's roles in the current tenant and are cached in
+    Redis; the cache is dropped as soon as any role in the tenant changes.
+    """
+
+    async def checker(
+        tenant: Tenant = Depends(get_current_tenant),
+        user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
+        redis: Redis = Depends(get_redis),
+    ) -> User:
+        granted = await rbac_service.get_user_permissions(db, redis, tenant.id, user.id)
+        if permission not in granted:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, f"Requires the '{permission}' permission"
+            )
+        return user
 
     return checker

@@ -51,8 +51,12 @@ async def create_tenant(db: AsyncSession, owner: User, name: str, slug: str | No
         await db.rollback()
         raise SlugTaken from exc
 
-    # The creator is automatically a member (their role comes in Milestone 3)
+    # The creator is a member, and owns the tenant
     db.add(Membership(tenant_id=tenant.id, user_id=owner.id))
+    # Imported here because rbac_service imports this module
+    from app.services import rbac_service
+
+    await rbac_service.grant_owner_role(db, tenant.id, owner.id)
     await db.commit()
     await db.refresh(tenant)
     return tenant
@@ -135,8 +139,13 @@ async def accept_invite(db: AsyncSession, user: User, raw_token: str) -> Tenant:
     if invite.email != user.email:
         raise InvalidInvite
 
+    from app.core import permissions as perms
+    from app.services import rbac_service
+
     if await get_membership(db, user.id, invite.tenant_id) is None:
         db.add(Membership(tenant_id=invite.tenant_id, user_id=user.id))
+        # Everyone joins as a plain member; an admin can grant more afterwards
+        await rbac_service.grant_system_role(db, invite.tenant_id, user.id, perms.MEMBER)
     invite.accepted_at = now
     await db.commit()
 

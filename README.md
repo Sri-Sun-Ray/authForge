@@ -47,6 +47,20 @@ outside local development.
 | `POST /tenants/{id}/switch` | move the session into a tenant (rotates its tokens) |
 | `GET /tenants/current` · `/current/members` | the tenant the token is scoped to |
 | `POST /tenants/current/invites` · `POST /invites/accept` | invite by email, redeem once |
+| `GET /permissions` · `GET /tenants/current/permissions` | the catalogue, and what you may do here |
+| `GET/POST /tenants/current/roles` · `PUT/DELETE .../{role_id}` | built-in and custom roles |
+| `GET/PUT /tenants/current/users/{user_id}/roles` | read or replace a member's roles |
+
+### Roles and permissions
+
+Three built-in roles (`owner`, `admin`, `member`) are seeded by a migration and shared by
+every tenant; tenants can add their own. Endpoints declare what they need, e.g.
+`Depends(require_permission("users:invite"))`.
+
+A user's permissions are cached in Redis for 5 minutes. Any role change bumps a per-tenant
+counter that forms part of the cache key, so every cached entry for that tenant is dropped
+at once — O(1), with no key scanning. If Redis is unavailable the check falls back to
+Postgres rather than failing.
 
 ## Tests and linting
 
@@ -80,7 +94,7 @@ tests/
 - [x] **1. Core auth:** register, login, logout, Argon2 hashing, RS256 access tokens,
       refresh-token rotation with reuse detection, JWKS endpoint
 - [x] **2. Multi-tenancy:** tenants, memberships, invites, tenant switching, Postgres RLS
-- [ ] **3. RBAC:** roles, permissions, `require_permission()` dependency, Redis permission cache
+- [x] **3. RBAC:** roles, permissions, `require_permission()` dependency, Redis permission cache
 - [ ] **4. Hardening:** sliding-window rate limiting, account lockout, email verification,
       password reset, Google OAuth2 login
 - [ ] **5. Audit logs:** append-only, hash-chained, searchable per tenant

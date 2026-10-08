@@ -7,7 +7,9 @@ Run scripts/setup-secrets.ps1 once first. See DEPLOY.md for the full walkthrough
 #>
 param(
     [Parameter(Mandatory = $true)][string]$ProjectId,
-    [string]$Region = "asia-south1",       # Mumbai; closest to Andhra Pradesh
+    # Keep this in the same region as the database: a cross-region query costs ~60ms,
+    # which dwarfs everything the service itself does.
+    [string]$Region = "asia-southeast1",   # Singapore, where Neon and Upstash live
     [string]$Service = "authforge"
 )
 
@@ -39,7 +41,13 @@ $secrets = @(
 
 # APP_BASE_URL is set afterwards: Cloud Run's hostname contains a generated hash,
 # so the real URL is only known once the service exists.
-$env_vars = @("ENVIRONMENT=production", "DEBUG=false") -join ","
+# The pool is the throughput ceiling: concurrent requests beyond it queue up.
+$env_vars = @(
+    "ENVIRONMENT=production",
+    "DEBUG=false",
+    "DB_POOL_SIZE=20",
+    "DB_MAX_OVERFLOW=10"
+) -join ","
 
 & $gcloud run deploy $Service `
     --source . `
@@ -52,7 +60,7 @@ $env_vars = @("ENVIRONMENT=production", "DEBUG=false") -join ","
     --cpu 1 `
     --memory 512Mi `
     --min-instances 0 `
-    --max-instances 3 `
+    --max-instances 5 `
     --timeout 60
 
 if ($LASTEXITCODE -ne 0) { throw "Deploy failed" }

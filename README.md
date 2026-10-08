@@ -6,6 +6,34 @@ Redis rate limiting, and tamper-evident audit logs.
 
 **Stack:** FastAPI · PostgreSQL · SQLAlchemy 2.0 (async) · Alembic · Redis · Docker · GitHub Actions
 
+**Live:** https://authforge-gta5uugctq-as.a.run.app/docs — Cloud Run, Neon Postgres, Upstash Redis
+
+## Performance
+
+Measured with [k6](scripts/load-test.js) against the deployed service: 50 concurrent users
+ramping over two minutes, exercising token verification (`GET /auth/me`), which is the hot
+path any protected endpoint goes through.
+
+| | Result |
+| --- | --- |
+| Requests | 25,060 over 2 min (190 req/s) |
+| Failures | **0.00%** (0 of 25,060) |
+| Token verification | median 112 ms · p95 **214 ms** |
+
+Run from a laptop in India against the Singapore region, on free tiers throughout
+(1 vCPU, 512 MB, max 5 instances), so round-trip network latency is included.
+
+An earlier run showed p95 of 1.77 s and 47 req/s. Two things were wrong, and neither was
+the application code:
+
+1. **The API and the database were in different regions**, so every request paid ~60 ms
+   crossing the Bay of Bengal.
+2. **The connection pool held 5 connections**, so 45 of 50 concurrent users were queuing
+   for one. The pool, not the CPU, was the throughput ceiling.
+
+Co-locating the service with the database and widening the pool to 20 gave 8× better p95
+and 4× the throughput.
+
 ## Quick start
 
 ```bash
@@ -130,8 +158,8 @@ tests/
 - [x] **4. Hardening:** sliding-window rate limiting, account lockout, email verification,
       password reset _(Google OAuth2 login still open — needs client credentials)_
 - [x] **5. Audit logs:** append-only, hash-chained, searchable per tenant
-- [ ] **6. Production:** 80%+ coverage, load test (k6/Locust), deploy to GCP Cloud Run,
-      architecture diagrams
+- [x] **6. Production:** 96% coverage, k6 load test, deployed to GCP Cloud Run
+      _(architecture diagram still to draw)_
 
 ## Design decisions
 

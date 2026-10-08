@@ -94,6 +94,11 @@ Take `http_reqs` (throughput) and `http_req_duration p(95)` from the summary and
 real numbers in the README and on your resume. Run it twice and use the second run:
 Cloud Run scales to zero, so the first run pays a cold start.
 
+**Keep the service in the same region as the database.** The first deployment put the API
+in Mumbai and Neon in Singapore, which cost ~60 ms per request, and ran a 5-connection
+pool that 50 concurrent users had to queue for: p95 1.77 s at 47 req/s. Same code in
+Singapore with a 20-connection pool: p95 214 ms at 190 req/s.
+
 ---
 
 ## Costs

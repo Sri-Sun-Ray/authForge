@@ -1,0 +1,18 @@
+# Keep the build context small, and make certain signing keys are never uploaded.
+# Without this file gcloud falls back to .gitignore; being explicit is safer.
+.git
+.github
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+.env
+keys
+tests
+docker-compose.yml
+README.md
+DEPLOY.md

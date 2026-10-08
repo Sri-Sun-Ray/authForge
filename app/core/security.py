@@ -71,9 +71,14 @@ def _read_key_file(path) -> bytes:
 
 @lru_cache
 def _private_key() -> RSAPrivateKey:
-    key = serialization.load_pem_private_key(
-        _read_key_file(get_settings().jwt_private_key_path), password=None
+    settings = get_settings()
+    # A PEM from the environment (secret manager) wins over a file on disk
+    pem = (
+        settings.jwt_private_key_pem.encode()
+        if settings.jwt_private_key_pem
+        else _read_key_file(settings.jwt_private_key_path)
     )
+    key = serialization.load_pem_private_key(pem, password=None)
     if not isinstance(key, RSAPrivateKey):
         raise RuntimeError("JWT private key must be an RSA key")
     return key
@@ -81,7 +86,13 @@ def _private_key() -> RSAPrivateKey:
 
 @lru_cache
 def _public_key() -> RSAPublicKey:
-    key = serialization.load_pem_public_key(_read_key_file(get_settings().jwt_public_key_path))
+    settings = get_settings()
+    pem = (
+        settings.jwt_public_key_pem.encode()
+        if settings.jwt_public_key_pem
+        else _read_key_file(settings.jwt_public_key_path)
+    )
+    key = serialization.load_pem_public_key(pem)
     if not isinstance(key, RSAPublicKey):
         raise RuntimeError("JWT public key must be an RSA key")
     return key

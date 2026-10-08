@@ -17,9 +17,16 @@ class Settings(BaseSettings):
     database_admin_url: str | None = None
     redis_url: str = "redis://localhost:6380/0"
 
-    # JWT (RS256): generate keys with `python scripts/generate_keys.py`
+    # JWT (RS256): generate keys with `python scripts/generate_keys.py`.
+    # In production the PEMs come from a secret manager instead of files on disk.
     jwt_private_key_path: Path = Path("keys/private.pem")
     jwt_public_key_path: Path = Path("keys/public.pem")
+    jwt_private_key_pem: str | None = None
+    jwt_public_key_pem: str | None = None
+
+    # Serverless platforms run many small instances, so each keeps few connections
+    db_pool_size: int = 5
+    db_max_overflow: int = 5
     jwt_issuer: str = "authforge"
     jwt_audience: str = "authforge-clients"
     access_token_ttl_minutes: int = 15

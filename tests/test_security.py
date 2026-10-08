@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import jwt
 import pytest
@@ -7,6 +8,8 @@ from app.core.config import get_settings
 from app.core.security import (
     TokenError,
     _private_key,
+    _public_jwk,
+    _public_key,
     create_access_token,
     decode_access_token,
     generate_refresh_token,
@@ -127,6 +130,31 @@ def test_token_verifies_with_published_jwks() -> None:
         token, public_key, algorithms=["RS256"], audience=get_settings().jwt_audience
     )
     assert claims["sub"] == "u"
+
+
+def test_keys_can_come_from_settings_instead_of_files() -> None:
+    """How production loads them: PEMs from a secret manager, no key files on disk."""
+    settings = get_settings()
+    private_pem = settings.jwt_private_key_path.read_text()
+    public_pem = settings.jwt_public_key_path.read_text()
+    caches = (_private_key, _public_key, _public_jwk)
+
+    try:
+        settings.jwt_private_key_pem = private_pem
+        settings.jwt_public_key_pem = public_pem
+        settings.jwt_private_key_path = Path("does/not/exist.pem")
+        settings.jwt_public_key_path = Path("does/not/exist.pem")
+        for cache in caches:
+            cache.cache_clear()
+
+        assert decode_access_token(create_access_token("u"))["sub"] == "u"
+    finally:
+        settings.jwt_private_key_pem = None
+        settings.jwt_public_key_pem = None
+        settings.jwt_private_key_path = Path("keys/private.pem")
+        settings.jwt_public_key_path = Path("keys/public.pem")
+        for cache in caches:
+            cache.cache_clear()
 
 
 def test_jwks_never_exposes_private_key_material() -> None:

@@ -14,5 +14,5 @@ htmlcov
 keys
 tests
 docker-compose.yml
-README.md
 DEPLOY.md
+# README.md is NOT excluded: pyproject.toml declares it, so pip install needs it

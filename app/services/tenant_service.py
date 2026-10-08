@@ -13,7 +13,7 @@ from app.core.config import get_settings
 from app.core.security import hash_refresh_token
 from app.models import Invite, Membership, RefreshToken, Tenant, User
 from app.schemas.auth import TokenPair
-from app.services import auth_service
+from app.services import audit_service, auth_service
 from app.services.auth_service import AuthError, ClientInfo
 
 
@@ -57,6 +57,15 @@ async def create_tenant(db: AsyncSession, owner: User, name: str, slug: str | No
     from app.services import rbac_service
 
     await rbac_service.grant_owner_role(db, tenant.id, owner.id)
+    await audit_service.record(
+        db,
+        audit_service.TENANT_CREATED,
+        tenant_id=tenant.id,
+        actor_user_id=owner.id,
+        target_type="tenant",
+        target_id=str(tenant.id),
+        details={"name": tenant.name, "slug": tenant.slug},
+    )
     await db.commit()
     await db.refresh(tenant)
     return tenant
@@ -123,6 +132,14 @@ async def create_invite(
         invited_by_user_id=invited_by.id,
     )
     db.add(invite)
+    await audit_service.record(
+        db,
+        audit_service.INVITE_CREATED,
+        tenant_id=tenant_id,
+        actor_user_id=invited_by.id,
+        target_type="invite",
+        details={"email": invite.email},
+    )
     await db.commit()
     await db.refresh(invite)
     return invite, raw_token
@@ -147,6 +164,14 @@ async def accept_invite(db: AsyncSession, user: User, raw_token: str) -> Tenant:
         # Everyone joins as a plain member; an admin can grant more afterwards
         await rbac_service.grant_system_role(db, invite.tenant_id, user.id, perms.MEMBER)
     invite.accepted_at = now
+    await audit_service.record(
+        db,
+        audit_service.INVITE_ACCEPTED,
+        tenant_id=invite.tenant_id,
+        actor_user_id=user.id,
+        target_type="invite",
+        target_id=str(invite.id),
+    )
     await db.commit()
 
     tenant = await db.get(Tenant, invite.tenant_id)

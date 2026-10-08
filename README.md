@@ -52,6 +52,18 @@ outside local development.
 | `GET/PUT /tenants/current/users/{user_id}/roles` | read or replace a member's roles |
 | `POST /auth/verify-email/request` · `/confirm` | confirm an address with a one-time link |
 | `POST /auth/password-reset` · `/password-reset/confirm` | reset a forgotten password |
+| `GET /audit-logs` · `/audit-logs/verify` | read the tenant's history, prove it is unaltered |
+
+### Audit log
+
+Logins, invites, role changes and resets are recorded. Entries are chained: each stores
+the hash of the previous entry for the same tenant, so editing or deleting one makes
+`GET /audit-logs/verify` report where the chain breaks. Writes take a per-tenant advisory
+lock, so two concurrent events cannot claim the same predecessor.
+
+Append-only is a database privilege, not a convention: the API's role holds `SELECT` and
+`INSERT` on `audit_logs` and nothing else, so even a fully compromised API cannot rewrite
+history. Tests assert that `UPDATE` and `DELETE` are refused.
 
 ### Abuse protection
 
@@ -117,7 +129,7 @@ tests/
 - [x] **3. RBAC:** roles, permissions, `require_permission()` dependency, Redis permission cache
 - [x] **4. Hardening:** sliding-window rate limiting, account lockout, email verification,
       password reset _(Google OAuth2 login still open — needs client credentials)_
-- [ ] **5. Audit logs:** append-only, hash-chained, searchable per tenant
+- [x] **5. Audit logs:** append-only, hash-chained, searchable per tenant
 - [ ] **6. Production:** 80%+ coverage, load test (k6/Locust), deploy to GCP Cloud Run,
       architecture diagrams
 

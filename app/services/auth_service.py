@@ -20,7 +20,7 @@ from app.core.security import (
 )
 from app.models import OneTimeToken, RefreshToken, User
 from app.schemas.auth import TokenPair
-from app.services import mailer
+from app.services import audit_service, mailer
 
 PURPOSE_VERIFY_EMAIL = "verify_email"
 PURPOSE_RESET_PASSWORD = "reset_password"  # noqa: S105 (a label, not a secret)
@@ -88,7 +88,9 @@ async def register_user(db: AsyncSession, email: str, password: str) -> User:
     return user
 
 
-async def authenticate(db: AsyncSession, email: str, password: str) -> User:
+async def authenticate(
+    db: AsyncSession, email: str, password: str, client: ClientInfo | None = None
+) -> User:
     settings = get_settings()
     now = datetime.now(UTC)
     user = await db.scalar(select(User).where(User.email == normalize_email(email)))
@@ -106,9 +108,16 @@ async def authenticate(db: AsyncSession, email: str, password: str) -> User:
         # Lock the account after repeated failures, so an attacker cannot work
         # through a password list even from many different IP addresses
         user.failed_login_count += 1
-        if user.failed_login_count >= settings.login_max_failed_attempts:
+        locked = user.failed_login_count >= settings.login_max_failed_attempts
+        if locked:
             user.locked_until = now + timedelta(minutes=settings.login_lockout_minutes)
             user.failed_login_count = 0
+        await audit_service.record(
+            db,
+            audit_service.ACCOUNT_LOCKED if locked else audit_service.LOGIN_FAILED,
+            actor_user_id=user.id,
+            client=client,
+        )
         await db.commit()
         raise InvalidCredentials
     if not user.is_active:
@@ -123,9 +132,12 @@ async def authenticate(db: AsyncSession, email: str, password: str) -> User:
 
 
 async def login(db: AsyncSession, email: str, password: str, client: ClientInfo) -> TokenPair:
-    user = await authenticate(db, email, password)
+    user = await authenticate(db, email, password, client)
     # A fresh login has no tenant yet; the client picks one with /tenants/{id}/switch
     pair, _ = await _issue_tokens(db, user, family_id=uuid.uuid4(), client=client, tenant_id=None)
+    await audit_service.record(
+        db, audit_service.LOGIN_SUCCEEDED, actor_user_id=user.id, client=client
+    )
     await db.commit()
     return pair
 
@@ -180,13 +192,17 @@ async def rotate_refresh_token(
 async def logout(db: AsyncSession, raw_token: str) -> None:
     """Revoke the session this refresh token belongs to. Unknown tokens are ignored,
     so logout is idempotent and doesn't reveal whether a token exists."""
-    family_id = await db.scalar(
-        select(RefreshToken.family_id).where(
-            RefreshToken.token_hash == hash_refresh_token(raw_token)
+    session = (
+        await db.execute(
+            select(RefreshToken.family_id, RefreshToken.user_id).where(
+                RefreshToken.token_hash == hash_refresh_token(raw_token)
+            )
         )
-    )
-    if family_id is not None:
+    ).first()
+    if session is not None:
+        family_id, user_id = session
         await _revoke_family(db, family_id, datetime.now(UTC))
+        await audit_service.record(db, audit_service.LOGOUT, actor_user_id=user_id)
         await db.commit()
 
 
@@ -255,6 +271,7 @@ async def request_email_verification(db: AsyncSession, user: User) -> None:
 async def confirm_email_verification(db: AsyncSession, raw_token: str) -> User:
     user = await _consume_one_time_token(db, raw_token, PURPOSE_VERIFY_EMAIL)
     user.is_email_verified = True
+    await audit_service.record(db, audit_service.EMAIL_VERIFIED, actor_user_id=user.id)
     await db.commit()
     await db.refresh(user)
     return user
@@ -274,6 +291,7 @@ async def request_password_reset(db: AsyncSession, email: str) -> None:
         PURPOSE_RESET_PASSWORD,
         timedelta(minutes=settings.password_reset_token_ttl_minutes),
     )
+    await audit_service.record(db, audit_service.PASSWORD_RESET_REQUESTED, actor_user_id=user.id)
     await db.commit()
     await mailer.send_email(
         to=user.email,
@@ -293,6 +311,7 @@ async def confirm_password_reset(db: AsyncSession, raw_token: str, new_password:
     )
     user.failed_login_count = 0
     user.locked_until = None
+    await audit_service.record(db, audit_service.PASSWORD_RESET_COMPLETED, actor_user_id=user.id)
     await db.commit()
 
 

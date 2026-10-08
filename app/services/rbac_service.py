@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import permissions as perms
 from app.models import Permission, Role, RolePermission, UserRole
 from app.schemas.rbac import RoleOut
+from app.services import audit_service
 from app.services.auth_service import AuthError
 from app.services.tenant_service import NotAMember, get_membership
 
@@ -155,7 +156,12 @@ async def get_system_role(db: AsyncSession, name: str) -> Role:
 
 
 async def create_role(
-    db: AsyncSession, redis: Redis, tenant_id: uuid.UUID, name: str, codes: list[str]
+    db: AsyncSession,
+    redis: Redis,
+    tenant_id: uuid.UUID,
+    name: str,
+    codes: list[str],
+    actor_user_id: uuid.UUID,
 ) -> RoleOut:
     permission_ids = await _permission_ids(db, codes)
     role = Role(tenant_id=tenant_id, name=name)
@@ -167,6 +173,15 @@ async def create_role(
         raise RoleNameTaken from exc
 
     db.add_all(RolePermission(role_id=role.id, permission_id=pid) for pid in permission_ids)
+    await audit_service.record(
+        db,
+        audit_service.ROLE_CREATED,
+        tenant_id=tenant_id,
+        actor_user_id=actor_user_id,
+        target_type="role",
+        target_id=str(role.id),
+        details={"name": name, "permissions": sorted(codes)},
+    )
     await db.commit()
     await invalidate_tenant_permissions(redis, tenant_id)
     return RoleOut(id=role.id, name=name, is_system=False, permissions=sorted(codes))
@@ -188,6 +203,7 @@ async def update_role(
     role_id: uuid.UUID,
     name: str | None,
     codes: list[str] | None,
+    actor_user_id: uuid.UUID,
 ) -> RoleOut:
     role = await _get_tenant_role(db, tenant_id, role_id)
     if name is not None:
@@ -196,6 +212,15 @@ async def update_role(
         permission_ids = await _permission_ids(db, codes)
         await db.execute(delete(RolePermission).where(RolePermission.role_id == role.id))
         db.add_all(RolePermission(role_id=role.id, permission_id=pid) for pid in permission_ids)
+    await audit_service.record(
+        db,
+        audit_service.ROLE_UPDATED,
+        tenant_id=tenant_id,
+        actor_user_id=actor_user_id,
+        target_type="role",
+        target_id=str(role.id),
+        details={"name": role.name, "permissions": sorted(codes) if codes else None},
+    )
     try:
         await db.commit()
     except IntegrityError as exc:
@@ -211,10 +236,24 @@ async def update_role(
 
 
 async def delete_role(
-    db: AsyncSession, redis: Redis, tenant_id: uuid.UUID, role_id: uuid.UUID
+    db: AsyncSession,
+    redis: Redis,
+    tenant_id: uuid.UUID,
+    role_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
 ) -> None:
     role = await _get_tenant_role(db, tenant_id, role_id)
+    name = role.name
     await db.delete(role)  # user_roles and role_permissions cascade
+    await audit_service.record(
+        db,
+        audit_service.ROLE_DELETED,
+        tenant_id=tenant_id,
+        actor_user_id=actor_user_id,
+        target_type="role",
+        target_id=str(role_id),
+        details={"name": name},
+    )
     await db.commit()
     await invalidate_tenant_permissions(redis, tenant_id)
 
@@ -251,6 +290,7 @@ async def assign_roles(
     tenant_id: uuid.UUID,
     user_id: uuid.UUID,
     role_ids: list[uuid.UUID],
+    actor_user_id: uuid.UUID,
 ) -> list[RoleOut]:
     """Replace the user's roles in this tenant."""
     if await get_membership(db, user_id, tenant_id) is None:
@@ -275,6 +315,15 @@ async def assign_roles(
     db.add_all(
         UserRole(tenant_id=tenant_id, user_id=user_id, role_id=role_id)
         for role_id in dict.fromkeys(role_ids)
+    )
+    await audit_service.record(
+        db,
+        audit_service.ROLES_ASSIGNED,
+        tenant_id=tenant_id,
+        actor_user_id=actor_user_id,
+        target_type="user",
+        target_id=str(user_id),
+        details={"role_ids": [str(role_id) for role_id in role_ids]},
     )
     await db.commit()
     await invalidate_tenant_permissions(redis, tenant_id)

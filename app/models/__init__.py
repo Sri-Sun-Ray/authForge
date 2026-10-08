@@ -29,12 +29,14 @@ Milestone 5 (models/audit.py)
 """
 
 from app.db.base import Base
+from app.models.audit import AuditLog
 from app.models.rbac import Permission, Role, RolePermission, UserRole
 from app.models.tenant import Invite, Membership, Tenant
 from app.models.token import OneTimeToken, RefreshToken
 from app.models.user import User
 
 __all__ = [
+    "AuditLog",
     "Base",
     "Invite",
     "Membership",

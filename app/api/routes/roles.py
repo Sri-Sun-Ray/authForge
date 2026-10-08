@@ -49,12 +49,14 @@ async def list_roles(
 async def create_role(
     body: RoleCreate,
     tenant: Tenant = Depends(get_current_tenant),
-    _: User = Depends(require_permission(perms.ROLES_CREATE)),
+    actor: User = Depends(require_permission(perms.ROLES_CREATE)),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ) -> RoleOut:
     try:
-        return await rbac_service.create_role(db, redis, tenant.id, body.name, body.permissions)
+        return await rbac_service.create_role(
+            db, redis, tenant.id, body.name, body.permissions, actor.id
+        )
     except rbac_service.RoleNameTaken as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, "A role with that name exists") from exc
     except rbac_service.UnknownPermission as exc:
@@ -66,13 +68,13 @@ async def update_role(
     role_id: uuid.UUID,
     body: RoleUpdate,
     tenant: Tenant = Depends(get_current_tenant),
-    _: User = Depends(require_permission(perms.ROLES_UPDATE)),
+    actor: User = Depends(require_permission(perms.ROLES_UPDATE)),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ) -> RoleOut:
     try:
         return await rbac_service.update_role(
-            db, redis, tenant.id, role_id, body.name, body.permissions
+            db, redis, tenant.id, role_id, body.name, body.permissions, actor.id
         )
     except rbac_service.RoleNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Role not found") from exc
@@ -88,12 +90,12 @@ async def update_role(
 async def delete_role(
     role_id: uuid.UUID,
     tenant: Tenant = Depends(get_current_tenant),
-    _: User = Depends(require_permission(perms.ROLES_DELETE)),
+    actor: User = Depends(require_permission(perms.ROLES_DELETE)),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ) -> None:
     try:
-        await rbac_service.delete_role(db, redis, tenant.id, role_id)
+        await rbac_service.delete_role(db, redis, tenant.id, role_id, actor.id)
     except rbac_service.RoleNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Role not found") from exc
     except rbac_service.SystemRoleImmutable as exc:
@@ -115,12 +117,14 @@ async def assign_user_roles(
     user_id: uuid.UUID,
     body: AssignRolesRequest,
     tenant: Tenant = Depends(get_current_tenant),
-    _: User = Depends(require_permission(perms.ROLES_ASSIGN)),
+    actor: User = Depends(require_permission(perms.ROLES_ASSIGN)),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ) -> list[RoleOut]:
     try:
-        return await rbac_service.assign_roles(db, redis, tenant.id, user_id, body.role_ids)
+        return await rbac_service.assign_roles(
+            db, redis, tenant.id, user_id, body.role_ids, actor.id
+        )
     except tenant_service.NotAMember as exc:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "That user is not a member of this tenant"
